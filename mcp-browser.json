@@ -1,0 +1,9 @@
+﻿{
+  "mcpServers": {
+    "browser": {
+      "command": "node",
+      "args": ["c:/Users/may/.gemini/antigravity/scratch/_PROJECTS/AntiBrowserExtension/antigravity-browser-extension/mcp-server/server.js"],
+      "description": "Antigravity Browser Bridge — control Chrome from IDE"
+    }
+  }
+}

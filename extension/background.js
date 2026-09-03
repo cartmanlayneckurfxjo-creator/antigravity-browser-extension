@@ -1,5 +1,5 @@
 // background.js - Service Worker
-// Handles: side panel open, content script messaging, WS bridge relay
+// Handles: side panel open, content script messaging, WS bridge relay, context menus
 
 const WS_URL = "ws://127.0.0.1:7842";
 let ws = null;
@@ -9,6 +9,52 @@ let pingInterval = null;
 // Open side panel on action click
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ tabId: tab.id });
+});
+
+// Setup Context Menus
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: "send-selection",
+    title: "🚀 Отправить в Antigravity IDE",
+    contexts: ["selection"]
+  });
+  chrome.contextMenus.create({
+    id: "summarize-page",
+    title: "📝 Сделать саммари этой страницы",
+    contexts: ["page"]
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "send-selection") {
+    const text = info.selectionText || "";
+    // Broadcast to sidepanel
+    chrome.runtime.sendMessage({
+      type: "CONTEXT_MENU_SELECTION",
+      text,
+      url: tab?.url,
+      title: tab?.title
+    }).catch(() => {});
+
+    // Send over WS to MCP server
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "user_selection",
+        text,
+        url: tab?.url,
+        title: tab?.title,
+        timestamp: Date.now()
+      }));
+    }
+  } else if (info.menuItemId === "summarize-page") {
+    if (tab?.id) {
+      chrome.sidePanel.open({ tabId: tab.id });
+      chrome.runtime.sendMessage({
+        type: "TRIGGER_SUMMARIZE",
+        tabId: tab.id
+      }).catch(() => {});
+    }
+  }
 });
 
 // Keep service worker alive while side panel is open
@@ -58,7 +104,6 @@ function connectWS() {
 
   ws.onerror = () => {
     wsReady = false;
-    if (pingInterval) clearInterval(pingInterval);
     broadcastStatus("error");
   };
 
@@ -107,6 +152,15 @@ async function executeCommand(cmd) {
         return await injectAndRun(tab.id, "scroll", cmd.params);
       case "getElement":
         return await injectAndRun(tab.id, "getElement", cmd.params);
+      case "getTranscript":
+        return await injectAndRun(tab.id, "getTranscript", cmd.params);
+      case "startPicker":
+        return await injectAndRun(tab.id, "startPicker", cmd.params);
+      case "getArticleText":
+        return await injectAndRun(tab.id, "getArticleText", cmd.params);
+      case "reload":
+        setTimeout(() => chrome.runtime.reload(), 100);
+        return { ok: true, message: "Reloading extension" };
       default:
         return { error: `Unknown method: ${cmd.method}` };
     }
@@ -136,9 +190,9 @@ async function injectAndRun(tabId, action, params) {
   await ensureContentScript(tabId);
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (action, params) => {
+    func: async (action, params) => {
       if (typeof window.__agy_execute === "function") {
-        return window.__agy_execute(action, params);
+        return await window.__agy_execute(action, params);
       }
       return { error: "Extension script not ready on this page" };
     },
@@ -200,5 +254,3 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // Auto-connect on startup
 connectWS();
-
-

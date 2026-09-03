@@ -354,6 +354,33 @@ mcp.tool("browser_get_element",
   }
 );
 
+mcp.tool("browser_get_youtube_transcript",
+  "Extract complete subtitles and transcript with timestamps from current YouTube video page",
+  {},
+  async () => {
+    const r = await sendToExtension("getTranscript", {}, 25000);
+    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+  }
+);
+
+mcp.tool("browser_pick_element",
+  "Launch interactive element picker in browser. User clicks an element on page; returns its CSS selector and details",
+  {},
+  async () => {
+    const r = await sendToExtension("startPicker", {}, 60000);
+    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+  }
+);
+
+mcp.tool("browser_get_article",
+  "Extract clean readable article text without ads, banners, or navbars for summarization",
+  {},
+  async () => {
+    const r = await sendToExtension("getArticleText");
+    return { content: [{ type: "text", text: JSON.stringify(r, null, 2) }] };
+  }
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 if (!WS_ONLY) {
   // MCP mode: connect to IDE via stdio

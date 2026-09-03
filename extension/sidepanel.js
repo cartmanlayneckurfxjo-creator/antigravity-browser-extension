@@ -1,3 +1,6 @@
+// sidepanel.js - Antigravity Browser Bridge & AI Chat
+// Handles: UI tabs, chat messaging, live page context, inspector, and MCP tools
+
 // ── Utility: Escape HTML ───────────────────────────────────────────────────
 function escapeHtml(str) {
   if (str === null || str === undefined) return "";
@@ -14,7 +17,6 @@ const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
 const pageTitle = document.getElementById("pageTitle");
 const pageUrl = document.getElementById("pageUrl");
-
 const logContainer = document.getElementById("log");
 
 // ── KeepAlive Port with Service Worker ─────────────────────────────────────
@@ -52,7 +54,7 @@ async function updatePageInfo() {
   } catch {}
 }
 
-// ── Content Script Auto-Injection ──────────────────────────────────────────
+// ── Content Script Auto-Injection & Runner ─────────────────────────────────
 async function ensureContentScript(tabId) {
   try {
     const results = await chrome.scripting.executeScript({
@@ -70,52 +72,59 @@ async function ensureContentScript(tabId) {
   }
 }
 
-// ── Extract Live Page Context ──────────────────────────────────────────────
-async function getActivePageContext() {
+async function runInActiveTab(action, params = {}) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab?.id) return null;
-
+    if (!tab?.id) return { error: "No active tab found" };
     if (tab.url?.startsWith("chrome://") || tab.url?.startsWith("edge://") || tab.url?.startsWith("chrome-extension://") || tab.url?.startsWith("about:")) {
-      addLog("Cannot inspect browser internal pages", "err");
-      return null;
+      return { error: "Cannot run on browser internal pages. Switch to regular website tab." };
     }
-
     await ensureContentScript(tab.id);
-
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => (typeof window.__agy_execute === "function" ? window.__agy_execute("getContext", {}) : null),
+      func: async (action, params) => {
+        if (typeof window.__agy_execute === "function") {
+          return await window.__agy_execute(action, params);
+        }
+        return { error: "Extension script not ready" };
+      },
+      args: [action, params]
     });
-
-    const ctx = results?.[0]?.result;
-    if (ctx) {
-      return {
-        url: ctx.url,
-        title: ctx.title,
-        selectedText: ctx.selectedText || null,
-        text: ctx.text ? ctx.text.slice(0, 10000) : "", // Bound context size
-        textLength: ctx.text?.length || 0,
-        headings: ctx.headings || []
-      };
-    }
+    return results?.[0]?.result ?? { error: "No response from page" };
   } catch (e) {
-    console.warn("Could not extract page context:", e);
-    addLog(`Context error: ${e.message}`, "err");
+    return { error: e.message };
+  }
+}
+
+// ── Extract Live Page Context ──────────────────────────────────────────────
+async function getActivePageContext() {
+  const ctx = await runInActiveTab("getContext");
+  if (ctx && !ctx.error) {
+    return {
+      url: ctx.url,
+      title: ctx.title,
+      selectedText: ctx.selectedText || null,
+      text: ctx.text ? ctx.text.slice(0, 10000) : "",
+      textLength: ctx.text?.length || 0,
+      headings: ctx.headings || []
+    };
   }
   return null;
 }
 
 // ── Background Message Listener ────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
-  // Status update
   if (msg.type === "WS_STATUS") {
     setStatus(msg.status);
     addLog(`MCP Server ${msg.status}`, msg.status === "connected" ? "ok" : "err");
+  } else if (msg.type === "CONTEXT_MENU_SELECTION") {
+    addLog(`🚀 [Selection -> IDE]: "${msg.text.slice(0, 100)}${msg.text.length > 100 ? '...' : ''}"`, "ok");
+  } else if (msg.type === "TRIGGER_SUMMARIZE") {
+    document.getElementById("btnSummarize").click();
   }
 });
 
-// ── Tools Tab Buttons ──────────────────────────────────────────────────────
+// ── Logging UI ─────────────────────────────────────────────────────────────
 function addLog(msg, type = "info") {
   const entry = document.createElement("div");
   entry.className = `log-entry ${type}`;
@@ -126,9 +135,15 @@ function addLog(msg, type = "info") {
   if (logContainer.children.length > 200) logContainer.removeChild(logContainer.firstChild);
 }
 
+// ── Buttons ────────────────────────────────────────────────────────────────
 document.getElementById("btnReconnect").onclick = () => {
   chrome.runtime.sendMessage({ type: "CONNECT" });
   addLog("Reconnecting to MCP server...", "info");
+};
+
+document.getElementById("btnClearLog").onclick = () => {
+  logContainer.innerHTML = "";
+  addLog("Log cleared", "info");
 };
 
 document.getElementById("btnCapture").onclick = async () => {
@@ -141,7 +156,7 @@ document.getElementById("btnCapture").onclick = async () => {
     addLog(`Headings: ${ctx.headings?.length || 0}`, "ok");
     if (ctx.selectedText) addLog(`Selection: "${ctx.selectedText.slice(0, 100)}"`, "ok");
   } else {
-    addLog("Failed to capture context", "err");
+    addLog("Failed to capture context (switch to standard web tab)", "err");
   }
 };
 
@@ -170,6 +185,57 @@ document.getElementById("btnScreenshot").onclick = async () => {
   } catch (e) {
     addLog(`Error: ${e.message}`, "err");
   }
+};
+
+document.getElementById("btnSummarize").onclick = async () => {
+  addLog("📝 Extracting clean page content...", "info");
+  const res = await runInActiveTab("getArticleText");
+  if (res.error) {
+    addLog(`Summary error: ${res.error}`, "err");
+    return;
+  }
+  const text = res.text || "";
+  if (!text) {
+    addLog("No readable text found on page", "err");
+    return;
+  }
+  addLog(`📄 Title: ${res.title}`, "ok");
+  const paragraphs = text.split("\n\n").filter(p => p.trim().length > 35).slice(0, 6);
+  paragraphs.forEach((p) => {
+    addLog(`• ${p.trim().slice(0, 160)}${p.length > 160 ? '...' : ''}`, "info");
+  });
+  addLog("Summary ready", "ok");
+};
+
+document.getElementById("btnPick").onclick = async () => {
+  addLog("🎯 Click any element on page (Esc to cancel)...", "info");
+  const res = await runInActiveTab("startPicker");
+  if (res.error) {
+    addLog(`Picker error: ${res.error}`, "err");
+  } else if (res.cancelled) {
+    addLog("Element picker cancelled", "info");
+  } else {
+    addLog(`🎯 Picked: <${res.tag}> "${res.selector}"`, "ok");
+    if (res.text) addLog(`Text: "${res.text}"`, "info");
+    addLog("📋 Selector copied to clipboard!", "ok");
+  }
+};
+
+document.getElementById("btnTranscript").onclick = async () => {
+  addLog("🎬 Extracting YouTube transcript...", "info");
+  const res = await runInActiveTab("getTranscript");
+  if (res.error) {
+    addLog(`Transcript error: ${res.error}`, "err");
+    return;
+  }
+  addLog(`🎬 Video: ${res.videoTitle}`, "ok");
+  addLog(`Found ${res.totalCues} timestamps/subtitles`, "ok");
+  const preview = res.cues.slice(0, 3).map(c => `[${c.time}] ${c.text}`).join("\n");
+  addLog(`Preview:\n${preview}\n...`, "info");
+  try {
+    await navigator.clipboard.writeText(res.fullText);
+    addLog("📋 Full transcript copied to clipboard!", "ok");
+  } catch {}
 };
 
 document.getElementById("btnTabs").onclick = async () => {
